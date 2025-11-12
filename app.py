@@ -1841,7 +1841,7 @@ def main():
         # )
         
         # Additional safety options
-        # st.sidebar.info("💡 **Tipp**: Bei Problemen mit gemischten Datentypen, versuchen Sie 1H oder 2H Resampling")
+        # st.sidebar.info("💡 Bei Problemen mit gemischten Datentypen, versuchen Sie 1H oder 2H Resampling")
         
         # Store settings in session state instead of global variables
         st.session_state['chart_optimization_enabled'] = enable_optimization
@@ -2185,14 +2185,16 @@ def main():
     else:
         # Welcome message
         with st.container(border=True):
-            st.subheader("⚠️ Willkommen zur Batterie-Analyse")
+            st.subheader("⚠️ Willkommen zur ecoplanet Batterie-Analyse")
             st.write("**📁 Um zu beginnen:**")
-            st.write("1. Wählen Sie ein Lastprofil aus der Liste in der Seitenleiste **oder**")
-            st.write("2. Laden Sie Ihre eigene Datei hoch (xlsx-Format)")
-            st.write("3. Konfigurieren Sie die Batterieparameter")
-            st.write("4. Klicken Sie auf '🚀 Analyse starten'")
+            st.write("1. Lastprofil aus der Liste in der Seitenleiste auswählen **oder**")
+            st.write("   Eigene Datei hochladen (xlsx-Format) und Auswahl in Drop-down darüber löschen")
+            st.write("2. Konfiguration der Batterieparameter:")
+            st.write("   Größe der Batterie (Kapazität und Leistung), sowie der Anteil, der für Peakshaving genutzt werden soll.")
+            st.write("   Die verbleibende Kapazität wird für Lastverschiebung genutzt. Es können die Spotmarktpreise aus 2024 oder 2025 gewählt werden.")
+            st.write("3. Klick auf '🚀 Analyse starten' (in der Seitenleiste)")
             st.write("")
-            st.info("💡 **Tipp:** Die Datei sollte zwei Spalten enthalten: 'timestamp' und 'load' (in kW)")
+            st.info("💡 Die Datei muss zwei Spalten enthalten: 'timestamp' und 'load' (in kW)")
     
     # Show available files
     st.markdown("### 📁 Verfügbare Dateien:")
