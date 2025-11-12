@@ -160,7 +160,7 @@ def read_load_profile(file_path):
         timestamp_col = df.columns[0]
     
     # Convert timestamp column
-    df['timestamp'] = pd.to_datetime(df[timestamp_col], dayfirst=True)
+    df['timestamp'] = pd.to_datetime(df[timestamp_col], format="mixed", dayfirst=True)
     
     # Remove timezone if present
     if df['timestamp'].dt.tz is not None:
