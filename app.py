@@ -43,20 +43,26 @@ def read_price_data(price_year=2024):
     """
     if price_year == 2024:
         # Read 2024 data
-        price_file = "input/spot_data_2024.xlsx"
+        price_file = "spot_data_2024.xlsx"
         df_prices = pd.read_excel(price_file)
-        df_prices['timestamp'] = pd.to_datetime(df_prices['timestamp'], dayfirst=True)
-        if df_prices['timestamp'].dt.tz is not None:
-            df_prices['timestamp'] = df_prices['timestamp'].dt.tz_localize(None)
+        df_prices['timestamp'] = pd.to_datetime(df_prices['timestamp'], format="mixed", dayfirst=True)
+        try:
+            if df_prices['timestamp'].dt.tz is not None:
+                df_prices['timestamp'] = df_prices['timestamp'].dt.tz_localize(None)
+        except (AttributeError, TypeError):
+            pass
         df_prices['price'] = pd.to_numeric(df_prices['Day-ahead Price (EUR/MWh)'], errors='coerce') / 1000
         df_prices = df_prices[['timestamp', 'price']].dropna()
     elif price_year == 2025:
         # Read 2025 data
-        price_file = "input/spot_data_2025.xlsx"
+        price_file = "spot_data_2025.xlsx"
         df_prices = pd.read_excel(price_file)
-        df_prices['timestamp'] = pd.to_datetime(df_prices['timestamp'], dayfirst=True)
-        if df_prices['timestamp'].dt.tz is not None:
-            df_prices['timestamp'] = df_prices['timestamp'].dt.tz_localize(None)
+        df_prices['timestamp'] = pd.to_datetime(df_prices['timestamp'], format="mixed", dayfirst=True)
+        try:
+            if df_prices['timestamp'].dt.tz is not None:
+                df_prices['timestamp'] = df_prices['timestamp'].dt.tz_localize(None)
+        except (AttributeError, TypeError):
+            pass
         df_prices['price'] = pd.to_numeric(df_prices['spotmarket'], errors='coerce') / 1000
         df_prices = df_prices[['timestamp', 'price']].dropna()
     else:
@@ -117,16 +123,26 @@ def load_solar_data(pv_total, custom_pv_file=None):
             st.stop()
         
         # Process custom PV data
-        df_pv["timestamp"] = pd.to_datetime(df_pv[pv_timestamp_col], dayfirst=True)
-        if df_pv["timestamp"].dt.tz is not None:
-            df_pv["timestamp"] = df_pv["timestamp"].dt.tz_localize(None)
+        try:
+            df_pv["timestamp"] = pd.to_datetime(df_pv[pv_timestamp_col], format="mixed", dayfirst=True)
+        except:
+            try:
+                df_pv["timestamp"] = pd.to_datetime(df_pv[pv_timestamp_col], utc=True)
+            except:
+                df_pv["timestamp"] = pd.to_datetime(df_pv[pv_timestamp_col], dayfirst=True)
+        
+        try:
+            if df_pv["timestamp"].dt.tz is not None:
+                df_pv["timestamp"] = df_pv["timestamp"].dt.tz_localize(None)
+        except (AttributeError, TypeError):
+            pass
         
         df_pv["yearly_production_kw"] = pd.to_numeric(df_pv[pv_load_col], errors='coerce')
         df_pv["yearly_production_kwh"] = df_pv["yearly_production_kw"] * INTERVAL_HOURS
         
     else:
         # Use standard PV profile
-        df_pv = pd.read_csv("input/solar_data_de_small.csv")
+        df_pv = pd.read_csv("solar_data_de_small.csv")
 
         df_pv["timestamp"] = pd.to_datetime(df_pv["timestamp"], format="%d.%m.%y %H:%M").dt.tz_localize(None)
         df_pv["yearly_production_kw"] = df_pv["yearly_production_fraction"].astype(float).to_numpy().clip(min=0) * pv_total * MAGIC_YEARLY_PV_MULTIPLIER / INTERVAL_HOURS
@@ -159,12 +175,26 @@ def read_load_profile(file_path):
         # Use first column as fallback
         timestamp_col = df.columns[0]
     
-    # Convert timestamp column
-    df['timestamp'] = pd.to_datetime(df[timestamp_col], format="mixed", dayfirst=True)
+    # Convert timestamp column - EXACT COPY from Dashboard-PS.py
+    try:
+        df["timestamp"] = pd.to_datetime(df[timestamp_col], dayfirst=True)
+    except Exception as e1:
+        try:
+            df["timestamp"] = pd.to_datetime(df[timestamp_col], utc=True)
+        except Exception as e2:
+            try:
+                df["timestamp"] = pd.to_datetime(df[timestamp_col], format="mixed", dayfirst=True)
+            except Exception as e3:
+                try:
+                    df["timestamp"] = pd.to_datetime(df[timestamp_col], format="%Y-%m-%dT%H:%M:%S%z")
+                except Exception as e4:
+                    try:
+                        df["timestamp"] = pd.to_datetime(df[timestamp_col], format="ISO8601")
+                    except Exception as e5:
+                        raise ValueError(
+                            f"Datei konnte nicht gelesen werden. Fehler:\n1. {e1}\n2. {e2}\n3. {e3}\n4. {e4}\n5. {e5}")
     
-    # Remove timezone if present
-    if df['timestamp'].dt.tz is not None:
-        df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(None)
     
     # Try to find the correct column for load in the Excel file
     load_col = None
@@ -278,7 +308,7 @@ def fast_forward_quantile(arr, window, q):
     windows = sliding_window_view(padded, window)   # shape (n, window)
     return np.nanpercentile(windows, q, axis=1)
 
-def run_battery_analysis(file_path, power_rating=100, capacity=215, pv_capacity=0, low_price_percentile=30, high_price_percentile=70, custom_pv_file=None, peak_shaving_capacity_percent=100, price_year=2024):
+def run_battery_analysis(file_path, power_rating=100, capacity=215, pv_capacity=0, low_price_percentile=30, high_price_percentile=70, custom_pv_file=None, peak_shaving_capacity_percent=100, price_year=2024, demand_charge_high=DEMAND_CHARGE_HIGH, demand_charge_low=DEMAND_CHARGE_LOW):
     """
     Run the complete battery analysis for a single file.
     This is the exact algorithm extracted from battery_savings_case_4_v3.py
@@ -292,19 +322,16 @@ def run_battery_analysis(file_path, power_rating=100, capacity=215, pv_capacity=
         df_load = read_load_profile(file_path)
         df_prices = read_price_data(price_year)
         
-        # Get load profile year for info message
-        load_year = df_load['timestamp'].dt.year.iloc[0]
-        
-        # Shift price data year to match load profile year (keeping day/time same)
-        if price_year != load_year:
-            st.info(f"ℹ️ Preisdaten von {price_year} werden auf Jahr {load_year} verschoben (Tag/Uhrzeit bleiben gleich)")
-        df_prices = shift_price_year_to_match_load(df_prices, df_load)
+        # Create merge keys based on month-day-time only (ignore year)
+        df_load['merge_key'] = df_load['timestamp'].dt.strftime('%m-%d %H:%M:%S')
+        df_prices['merge_key'] = df_prices['timestamp'].dt.strftime('%m-%d %H:%M:%S')
         
         df_pv = load_solar_data(pv_capacity, custom_pv_file)
+        df_pv['merge_key'] = df_pv['timestamp'].dt.strftime('%m-%d %H:%M:%S')
         
-        # Merge all dataframes
-        df_merged = pd.merge(df_load, df_prices, on='timestamp', how='left')
-        df_merged = pd.merge(df_merged, df_pv, on='timestamp', how='left')
+        # Merge all dataframes on merge_key (not timestamp) - this ignores year differences
+        df_merged = pd.merge(df_load, df_prices[['merge_key', 'price']], on='merge_key', how='left')
+        df_merged = pd.merge(df_merged, df_pv[['merge_key', 'yearly_production_kw', 'yearly_production_kwh']], on='merge_key', how='left')
         df_merged['load_pv'] = df_merged['load_org'] - df_merged['yearly_production_kw']
         df_merged['net_load_kw'] = df_merged['load_pv']
         df_merged['net_load_kwh'] = df_merged['load_pv'] * 0.25
@@ -372,7 +399,7 @@ def run_battery_analysis(file_path, power_rating=100, capacity=215, pv_capacity=
             threshold_kw = peak_load - peak_reduction_ps
             
             volllaststunden_ps = total_energy_kwh_case_4 / peak_after_ps if peak_after_ps > 0 else 0
-            demand_charge = DEMAND_CHARGE_HIGH if volllaststunden_ps >= VOLLLASTSTUNDEN_THRESHOLD else DEMAND_CHARGE_LOW
+            demand_charge = demand_charge_high if volllaststunden_ps >= VOLLLASTSTUNDEN_THRESHOLD else demand_charge_low
             #annual_savings_ps = peak_reduction_ps * demand_charge
             
             all_results.append({
@@ -1412,7 +1439,7 @@ def create_load_stats_box(df):
     return html_content
 
 
-def create_cost_box(df):
+def create_cost_box(df, demand_charge_high=DEMAND_CHARGE_HIGH, demand_charge_low=DEMAND_CHARGE_LOW):
     """Create an information box showing cost analysis comparison."""
     
     # === CASE 4: With Battery ===
@@ -1430,7 +1457,7 @@ def create_cost_box(df):
     
 
     volllaststunden_case_4 = total_energy_imported_case_4 / peak_load_case_4 if peak_load_case_4 > 0 else 0
-    demand_charge_rate_case_4 = DEMAND_CHARGE_HIGH if volllaststunden_case_4 >= VOLLLASTSTUNDEN_THRESHOLD else DEMAND_CHARGE_LOW
+    demand_charge_rate_case_4 = demand_charge_high if volllaststunden_case_4 >= VOLLLASTSTUNDEN_THRESHOLD else demand_charge_low
     demand_cost_case_4 = peak_load_case_4 * demand_charge_rate_case_4
     
     net_cost_case_4 = energy_cost_case_4 - energy_revenue_case_4 + demand_cost_case_4
@@ -1447,7 +1474,7 @@ def create_cost_box(df):
     peak_load_case_1 = df['net_load_kw'].max()
     total_energy_case_1 = (df['net_load_kw'] * 0.25).sum()
     volllaststunden_case_1 = total_energy_case_1 / peak_load_case_1 if peak_load_case_1 > 0 else 0
-    demand_charge_rate_case_1 = DEMAND_CHARGE_HIGH if volllaststunden_case_1 >= VOLLLASTSTUNDEN_THRESHOLD else DEMAND_CHARGE_LOW
+    demand_charge_rate_case_1 = demand_charge_high if volllaststunden_case_1 >= VOLLLASTSTUNDEN_THRESHOLD else demand_charge_low
     demand_cost_case_1 = peak_load_case_1 * demand_charge_rate_case_1
     net_cost_case_1 = energy_cost_case_1 - energy_revenue_case_1 + demand_cost_case_1
     
@@ -1456,8 +1483,8 @@ def create_cost_box(df):
 
     # FIX POTENTIAL PEAK DEMAND MISMATCH
     if volllaststunden_case_1 < VOLLLASTSTUNDEN_THRESHOLD:
-        demand_charge_rate_case_1 = DEMAND_CHARGE_HIGH
-        demand_charge_rate_case_4 = DEMAND_CHARGE_HIGH
+        demand_charge_rate_case_1 = demand_charge_high
+        demand_charge_rate_case_4 = demand_charge_high
 
         # Change case 4
         demand_cost_case_4 = peak_load_case_4 * demand_charge_rate_case_4
@@ -1479,7 +1506,7 @@ def create_cost_box(df):
     return html_content
 
 
-def create_financial_value_box(df, power_rating, capacity):
+def create_financial_value_box(df, power_rating, capacity, demand_charge_high=DEMAND_CHARGE_HIGH, demand_charge_low=DEMAND_CHARGE_LOW):
     """Create a financial/customer value information box with ROI, payback, and benefit analysis."""
     
     # === CALCULATE FINANCIAL METRICS ===
@@ -1506,7 +1533,7 @@ def create_financial_value_box(df, power_rating, capacity):
     peak_load_case_4 = df['grid_import_kw'].max()
     total_energy_imported_case_4 = (df['grid_import_kw'] * 0.25).sum()
     volllaststunden_case_4 = total_energy_imported_case_4 / peak_load_case_4 if peak_load_case_4 > 0 else 0
-    demand_charge_rate_case_4 = DEMAND_CHARGE_HIGH if volllaststunden_case_4 >= VOLLLASTSTUNDEN_THRESHOLD else DEMAND_CHARGE_LOW
+    demand_charge_rate_case_4 = demand_charge_high if volllaststunden_case_4 >= VOLLLASTSTUNDEN_THRESHOLD else demand_charge_low
     demand_cost_case_4 = peak_load_case_4 * demand_charge_rate_case_4
     
     net_cost_case_4 = energy_cost_case_4 - energy_revenue_case_4 + demand_cost_case_4
@@ -1523,7 +1550,7 @@ def create_financial_value_box(df, power_rating, capacity):
     peak_load_case_1 = df['net_load_kw'].max()
     total_energy_case_1 = (df['net_load_kw'] * 0.25).sum()
     volllaststunden_case_1 = total_energy_case_1 / peak_load_case_1 if peak_load_case_1 > 0 else 0
-    demand_charge_rate_case_1 = DEMAND_CHARGE_HIGH if volllaststunden_case_1 >= VOLLLASTSTUNDEN_THRESHOLD else DEMAND_CHARGE_LOW
+    demand_charge_rate_case_1 = demand_charge_high if volllaststunden_case_1 >= VOLLLASTSTUNDEN_THRESHOLD else demand_charge_low
     demand_cost_case_1 = peak_load_case_1 * demand_charge_rate_case_1
     
     net_cost_case_1 = energy_cost_case_1 - energy_revenue_case_1 + demand_cost_case_1
@@ -1531,8 +1558,8 @@ def create_financial_value_box(df, power_rating, capacity):
 
     # FIX POTENTIAL PEAK DEMAND MISMATCH
     if volllaststunden_case_1 < VOLLLASTSTUNDEN_THRESHOLD:
-        demand_charge_rate_case_1 = DEMAND_CHARGE_HIGH
-        demand_charge_rate_case_4 = DEMAND_CHARGE_HIGH
+        demand_charge_rate_case_1 = demand_charge_high
+        demand_charge_rate_case_4 = demand_charge_high
 
         # Change case 4
         demand_cost_case_4 = peak_load_case_4 * demand_charge_rate_case_4
@@ -1682,7 +1709,7 @@ def main():
     # File selection
     st.sidebar.write("**📁 Lastgang:**")
     
-    input_directories = ["data"]
+    input_directories = ["input_customers"]
     available_files = []
     
     for directory in input_directories:
@@ -1784,6 +1811,26 @@ def main():
         help="Wählen Sie das Jahr der Spotmarktpreise für die Simulation"
     )
     
+    # Demand charge configuration
+    st.sidebar.subheader("💶 Netzentgelte (Leistungspreis)")
+    demand_charge_high = st.sidebar.number_input(
+        "Leistungspreis >= 2500 VLH (€/kW):",
+        min_value=0.0,
+        max_value=500.0,
+        value=float(DEMAND_CHARGE_HIGH),
+        step=1.0,
+        help="Leistungspreis bei >= 2500 Volllaststunden"
+    )
+    
+    demand_charge_low = st.sidebar.number_input(
+        "Leistungspreis < 2500 VLH (€/kW):",
+        min_value=0.0,
+        max_value=500.0,
+        value=float(DEMAND_CHARGE_LOW),
+        step=1.0,
+        help="Leistungspreis bei < 2500 Volllaststunden"
+    )
+    
     # Price boundary configuration
     st.sidebar.subheader("📊 Arbitrage-Schwellenwerte")
     enable_arbitrage = st.sidebar.checkbox(
@@ -1841,7 +1888,7 @@ def main():
         # )
         
         # Additional safety options
-        # st.sidebar.info("💡 Bei Problemen mit gemischten Datentypen, versuchen Sie 1H oder 2H Resampling")
+        # st.sidebar.info("💡 **Tipp**: Bei Problemen mit gemischten Datentypen, versuchen Sie 1H oder 2H Resampling")
         
         # Store settings in session state instead of global variables
         st.session_state['chart_optimization_enabled'] = enable_optimization
@@ -1863,7 +1910,7 @@ def main():
         
         with st.spinner("Batterieanalyse wird durchgeführt..."):
             df_result, actual_power, actual_capacity, threshold = run_battery_analysis(
-                uploaded_file, power_rating, capacity, pv_capacity, low_price_percentile, high_price_percentile, custom_pv_file, peak_shaving_capacity_percent, price_year
+                uploaded_file, power_rating, capacity, pv_capacity, low_price_percentile, high_price_percentile, custom_pv_file, peak_shaving_capacity_percent, price_year, demand_charge_high, demand_charge_low
             )
             
             if df_result is not None:
@@ -1886,6 +1933,8 @@ def main():
                 st.session_state['high_price_percentile'] = high_price_percentile
                 st.session_state['peak_shaving_capacity_percent'] = peak_shaving_capacity_percent
                 st.session_state['price_year'] = price_year
+                st.session_state['demand_charge_high'] = demand_charge_high
+                st.session_state['demand_charge_low'] = demand_charge_low
                 
                 # Show data summary
                 st.sidebar.info(f"✅ {len(df_result):,} Datenpunkte geladen von {df_result['timestamp'].min().strftime('%d.%m.%Y')} bis {df_result['timestamp'].max().strftime('%d.%m.%Y')}")
@@ -1945,7 +1994,9 @@ def main():
 
         with col_kpis_1:
             # Financial Value box using native Streamlit components
-            financial_metrics = create_financial_value_box(df, power, cap)
+            demand_high = st.session_state.get('demand_charge_high', DEMAND_CHARGE_HIGH)
+            demand_low = st.session_state.get('demand_charge_low', DEMAND_CHARGE_LOW)
+            financial_metrics = create_financial_value_box(df, power, cap, demand_high, demand_low)
             
             # Create a beautiful styled box that matches other boxes using single-line HTML like the working boxes
             html_content = f'<div style="background: white; border: 2px solid #AEAEAE; padding: 20px; border-radius: 10px; color: #00095B; text-align: center; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); margin: 10px 0;"><h3 style="margin-top: 0; color: #00095B;">Finanzielle Bewertung</h3><div style= "display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0;"><div style="background: #f8f9fa; padding: 12px; border-radius: 8px; border: 1px solid #AEAEAE;"><strong style="color: #00095B;">Investitionskosten</strong><br><span style="font-size: 16px; color: #00095B;">{financial_metrics["estimated_battery_cost"]:,.0f} €</span><br><span style="font-size: 12px; color: #00095B;">{financial_metrics["battery_cost_per_kwh"]}€/kWh + {(financial_metrics["installation_factor"]-1)*100:.0f}% Installation</span></div><div style="background: #f8f9fa; padding: 12px; border-radius: 8px; border: 1px solid #AEAEAE;"><strong style="color: #00095B;">📈 ROI & Amortisation</strong><br><span style="font-size: 16px; color: #00095B;">{financial_metrics["roi_percent"]:.1f}% / Jahr</span><br><span style="font-size: 12px; color: #00095B;">Amortisation: {financial_metrics["payback_years"]:.1f} Jahre</span></div></div><div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0; border: 1px solid #AEAEAE;"><strong style="font-size: 16px; color: #00095B;">🔄 Lastverschiebung-Details:</strong><div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; font-size: 14px;"><div><strong style="color: #00095B;">Energie geladen:</strong><br><span style="color: #00095B;">{financial_metrics["total_arbitrage_charge_energy"]:,.0f} kWh</span><br><span style="font-size: 12px; color: #00095B;">Ø {financial_metrics["avg_arbitrage_charge_price"]:.2f} ct/kWh</span></div><div><strong style="color: #00095B;">Energie entladen:</strong><br><span style="color: #00095B;">{financial_metrics["total_arbitrage_discharge_energy"]:,.0f} kWh</span><br><span style="font-size: 12px; color: #00095B;">Ø {financial_metrics["avg_arbitrage_discharge_price"]:.2f} ct/kWh</span></div></div><div style="margin-top: 10px; padding: 8px; background: #e8f4fd; border-radius: 6px;"><strong style="color: #00095B;">Ohne Lastverschiebung:</strong> {financial_metrics["cost_without_arbitrage"]:,.0f} €<br><strong style="color: #00095B;">Mit Lastverschiebung:</strong> {financial_metrics["cost_with_arbitrage"]:,.0f} €<br><strong style="color: #00095B;">Ersparnis:</strong> {financial_metrics["arbitrage_savings"]:,.0f} €<br><strong style="color: #00095B;">Import vermieden:</strong> {financial_metrics["arbitrage_import_cost_saved"]:,.0f} €</div></div><div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0; border: 1px solid #AEAEAE;"><strong style="font-size: 16px; color: #00095B;">Nutzen-Aufschlüsselung:</strong><div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px; font-size: 14px;"><div><strong style="color: #00095B;">Peak Shaving:</strong><br><span style="color: #00095B;">{financial_metrics["peak_shaving_benefit"]:,.0f} €/Jahr</span><br><span style="font-size: 12px; color: #00095B;">(-{financial_metrics["peak_reduction_kw"]:.1f} kW Spitzenlast)</span></div><div><strong style="color: #00095B;">Arbitrage-Handel:</strong><br><span style="color: #00095B;">{financial_metrics["arbitrage_benefit"]:,.0f} €/Jahr</span><br><span style="font-size: 12px; color: #00095B;">(Preis-Optimierung)</span></div><div><strong style="color: #00095B;">PV Eigenverbrauch:</strong><br><span style="color: #00095B;">{financial_metrics["pv_self_consumption_benefit"]:,.0f} €/Jahr</span><br><span style="font-size: 12px; color: #00095B;">({financial_metrics["pv_stored_in_battery"]:.0f} kWh gespeichert)</span></div></div></div><div style="background: #DCFCE7; color: #15803D; padding: 12px; border-radius: 8px; border: 2px solid #AEAEAE;"><strong style="font-size: 18px;"> Gesamt-Ersparnis: {financial_metrics["annual_savings"]:,.0f} €/Jahr</strong></div></div>'
@@ -1956,7 +2007,7 @@ def main():
             # Cost Analysis box
             try:
                 st.markdown(
-                    create_cost_box(df),
+                    create_cost_box(df, demand_high, demand_low),
                     unsafe_allow_html=True
                 )
             except Exception as e:
@@ -2186,15 +2237,13 @@ def main():
         # Welcome message
         with st.container(border=True):
             st.subheader("⚠️ Willkommen zur ecoplanet Batterie-Analyse")
-            st.write("**📁 Um zu beginnen:**")
-            st.write("1. Lastprofil aus der Liste in der Seitenleiste auswählen **oder**")
-            st.write("   Eigene Datei hochladen (xlsx-Format) und Auswahl in Drop-down darüber löschen")
+            st.write("**📁 Um ein Lastprofil zu analysieren:**")
+            st.write("1. Lastprofil aus der Liste in der Seitenleiste auswählen **oder** eigene Datei hochladen (xlsx-Format) und Auswahl in Drop-down darüber löschen")
             st.write("2. Konfiguration der Batterieparameter:")
             st.write("   Größe der Batterie (Kapazität und Leistung), sowie der Anteil, der für Peakshaving genutzt werden soll.")
             st.write("   Die verbleibende Kapazität wird für Lastverschiebung genutzt. Es können die Spotmarktpreise aus 2024 oder 2025 gewählt werden.")
             st.write("3. Klick auf '🚀 Analyse starten' (in der Seitenleiste)")
             st.write("")
-            st.info("💡 Die Datei muss zwei Spalten enthalten: 'timestamp' und 'load' (in kW)")
     
     # Show available files
     st.markdown("### 📁 Verfügbare Dateien:")
