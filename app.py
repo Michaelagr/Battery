@@ -43,7 +43,7 @@ def read_price_data(price_year=2024):
     """
     if price_year == 2024:
         # Read 2024 data
-        price_file = "spot_data_2024.xlsx"
+        price_file = "data/spot_data_2024.xlsx"
         df_prices = pd.read_excel(price_file)
         df_prices['timestamp'] = pd.to_datetime(df_prices['timestamp'], format="mixed", dayfirst=True)
         try:
@@ -55,7 +55,7 @@ def read_price_data(price_year=2024):
         df_prices = df_prices[['timestamp', 'price']].dropna()
     elif price_year == 2025:
         # Read 2025 data
-        price_file = "spot_data_2025.xlsx"
+        price_file = "data/spot_data_2025.xlsx"
         df_prices = pd.read_excel(price_file)
         df_prices['timestamp'] = pd.to_datetime(df_prices['timestamp'], format="mixed", dayfirst=True)
         try:
@@ -142,7 +142,7 @@ def load_solar_data(pv_total, custom_pv_file=None):
         
     else:
         # Use standard PV profile
-        df_pv = pd.read_csv("solar_data_de_small.csv")
+        df_pv = pd.read_csv("data/solar_data_de_small.csv")
 
         df_pv["timestamp"] = pd.to_datetime(df_pv["timestamp"], format="%d.%m.%y %H:%M").dt.tz_localize(None)
         df_pv["yearly_production_kw"] = df_pv["yearly_production_fraction"].astype(float).to_numpy().clip(min=0) * pv_total * MAGIC_YEARLY_PV_MULTIPLIER / INTERVAL_HOURS
@@ -1709,7 +1709,7 @@ def main():
     # File selection
     st.sidebar.write("**📁 Lastgang:**")
     
-    input_directories = ["input_customers"]
+    input_directories = ["input"]
     available_files = []
     
     for directory in input_directories:
